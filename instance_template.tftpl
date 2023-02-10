@@ -1,0 +1,60 @@
+#!/bin/bash 
+
+prep_system() {
+
+DEBIAN_FRONTEND=noninteractive apt-get -qqy update
+DEBIAN_FRONTEND=noninteractive apt-get -qqy -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' upgrade
+DEBIAN_FRONTEND=noninteractive apt-get -qqy -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install linux-headers-$(uname -r) build-essential python3-pip curl wget unzip jq debian-keyring debian-archive-keyring apt-transport-https ca-certificates software-properties-common
+}
+
+add_logging() {
+    echo "deb https://repo.logdna.com stable main" | tee /etc/apt/sources.list.d/logdna.list
+    wget -O- https://repo.logdna.com/logdna.gpg | apt-key add -
+    DEBIAN_FRONTEND=noninteractive apt-get -qqy update
+    DEBIAN_FRONTEND=noninteractive apt-get install logdna-agent < "/dev/null"
+    logdna-agent -k ${logdna_ingestion_key}
+    logdna-agent -s LOGDNA_APIHOST=api.${region}.logging.cloud.ibm.com
+    logdna-agent -t ${vpc_tag}
+    systemctl enable logdna-agent
+}
+
+add_monitoring() {
+curl -sL https://ibm.biz/install-sysdig-agent | bash -s -- --access_key ${monitoring_ingestion_key} --collector ingest.private.${region}.monitoring.cloud.ibm.com --collector_port 6443 --secure false --check_certificate false --tags ${vpc_tag} --additional_conf 'sysdig_capture_enabled: false'
+}
+
+add_caddy() {
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+    
+    DEBIAN_FRONTEND=noninteractive apt-get -qqy update
+    DEBIAN_FRONTEND=noninteractive apt-get -qqy -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install caddy
+
+    rm -f /etc/caddy/Caddyfile
+
+cat <<EOF > /etc/caddy/Caddyfile
+:80 {
+    reverse_proxy localhost:8080
+}
+EOF
+
+    systemctl enable --now caddy
+    systemctl restart caddy
+}
+
+add_docker() {
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+DEBIAN_FRONTEND=noninteractive apt-get -qqy update
+DEBIAN_FRONTEND=noninteractive apt-get -qqy -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install docker-ce
+
+docker run -d -P -p 8080:80 --name whoami containous/whoami
+}
+
+prep_system
+add_logging
+add_monitoring
+add_caddy
+add_docker
