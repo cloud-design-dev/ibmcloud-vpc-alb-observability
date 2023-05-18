@@ -10,8 +10,6 @@ provider "logdna" {
   url        = local.at_endpoint
 }
 
-
-
 provider "ibm" {
   region = var.region
 }
